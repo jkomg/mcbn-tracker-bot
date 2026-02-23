@@ -22,11 +22,16 @@ const CATEGORY_OPTIONS = [
   { key: 'unmitigated_stain', label: 'Unmitigated stain' },
 ] as const;
 
+const PAGE_SIZE = 25;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 const CHARACTER_MENU_ID = 'xp:submit:character';
 const PERIOD_MENU_ID = 'xp:submit:period';
 const CATEGORIES_MENU_ID = 'xp:submit:categories';
+const CHARACTER_PREV_ID = 'xp:submit:character-prev';
+const CHARACTER_NEXT_ID = 'xp:submit:character-next';
+const PERIOD_PREV_ID = 'xp:submit:period-prev';
+const PERIOD_NEXT_ID = 'xp:submit:period-next';
 const LINKS_BUTTON_ID = 'xp:submit:links';
 const SUBMIT_BUTTON_ID = 'xp:submit:confirm';
 const CANCEL_BUTTON_ID = 'xp:submit:cancel';
@@ -39,6 +44,8 @@ type ClaimDraft = {
   availableCharacters: string[];
   openPeriods: string[];
   currentNight: string | null;
+  characterPage: number;
+  periodPage: number;
   categories: string[];
   links: Record<string, string>;
   createdAt: number;
@@ -89,6 +96,31 @@ function parseLinkLines(raw: string): Record<string, string> {
   return map;
 }
 
+function pageCount(values: string[]): number {
+  return Math.max(1, Math.ceil(values.length / PAGE_SIZE));
+}
+
+function pageSlice(values: string[], page: number): string[] {
+  const start = page * PAGE_SIZE;
+  return values.slice(start, start + PAGE_SIZE);
+}
+
+function clampPage(page: number, values: string[]): number {
+  const maxPage = pageCount(values) - 1;
+  return Math.max(0, Math.min(page, maxPage));
+}
+
+function pageForValue(values: string[], value?: string): number {
+  if (!value) {
+    return 0;
+  }
+  const idx = values.indexOf(value);
+  if (idx < 0) {
+    return 0;
+  }
+  return Math.floor(idx / PAGE_SIZE);
+}
+
 function renderDraft(draft: ClaimDraft): string {
   const selected = draft.categories.length
     ? draft.categories.map((k) => `- ${getCategoryLabel(k)} (${k})`).join('\n')
@@ -113,6 +145,9 @@ function renderDraft(draft: ClaimDraft): string {
     '**Link status**',
     linksSummary,
     '',
+    'Link entry format: `category_key=https://discord.com/channels/...`',
+    'After selecting categories, click **Add / Update Links (Required)**.',
+    '',
     !draft.characterName || !draft.playPeriod
       ? 'Status: Select character and play period to continue.'
       : missingLinks.length
@@ -124,14 +159,23 @@ function renderDraft(draft: ClaimDraft): string {
 }
 
 function buildRows(draft: ClaimDraft, disabled = false) {
-  const characterOptions = draft.availableCharacters.slice(0, 25).map((name) =>
+  draft.characterPage = clampPage(draft.characterPage, draft.availableCharacters);
+  draft.periodPage = clampPage(draft.periodPage, draft.openPeriods);
+
+  const characterTotalPages = pageCount(draft.availableCharacters);
+  const periodTotalPages = pageCount(draft.openPeriods);
+
+  const characterPageValues = pageSlice(draft.availableCharacters, draft.characterPage);
+  const periodPageValues = pageSlice(draft.openPeriods, draft.periodPage);
+
+  const characterOptions = characterPageValues.map((name) =>
     new StringSelectMenuOptionBuilder()
       .setLabel(truncateLabel(name))
       .setValue(name)
       .setDefault(draft.characterName === name),
   );
 
-  const periodOptions = draft.openPeriods.slice(0, 25).map((label) =>
+  const periodOptions = periodPageValues.map((label) =>
     new StringSelectMenuOptionBuilder()
       .setLabel(truncateLabel(label))
       .setValue(label)
@@ -140,7 +184,7 @@ function buildRows(draft: ClaimDraft, disabled = false) {
 
   const characterSelect = new StringSelectMenuBuilder()
     .setCustomId(CHARACTER_MENU_ID)
-    .setPlaceholder(characterOptions.length ? 'Select character' : 'No active characters available')
+    .setPlaceholder(characterOptions.length ? `Select character (page ${draft.characterPage + 1}/${characterTotalPages})` : 'No active characters available')
     .setMinValues(1)
     .setMaxValues(1)
     .setDisabled(disabled || characterOptions.length === 0)
@@ -148,7 +192,7 @@ function buildRows(draft: ClaimDraft, disabled = false) {
 
   const periodSelect = new StringSelectMenuBuilder()
     .setCustomId(PERIOD_MENU_ID)
-    .setPlaceholder(periodOptions.length ? 'Select play period' : 'No open periods available')
+    .setPlaceholder(periodOptions.length ? `Select play period (page ${draft.periodPage + 1}/${periodTotalPages})` : 'No open periods available')
     .setMinValues(1)
     .setMaxValues(1)
     .setDisabled(disabled || periodOptions.length === 0)
@@ -170,8 +214,15 @@ function buildRows(draft: ClaimDraft, disabled = false) {
       ),
     );
 
-  const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(LINKS_BUTTON_ID).setLabel('Add / Update Links').setStyle(ButtonStyle.Secondary).setDisabled(disabled || !categoriesEnabled),
+  const pagerButtons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(CHARACTER_PREV_ID).setLabel('Char ◀').setStyle(ButtonStyle.Secondary).setDisabled(disabled || draft.characterPage <= 0),
+    new ButtonBuilder().setCustomId(CHARACTER_NEXT_ID).setLabel('Char ▶').setStyle(ButtonStyle.Secondary).setDisabled(disabled || draft.characterPage >= characterTotalPages - 1),
+    new ButtonBuilder().setCustomId(PERIOD_PREV_ID).setLabel('Period ◀').setStyle(ButtonStyle.Secondary).setDisabled(disabled || draft.periodPage <= 0),
+    new ButtonBuilder().setCustomId(PERIOD_NEXT_ID).setLabel('Period ▶').setStyle(ButtonStyle.Secondary).setDisabled(disabled || draft.periodPage >= periodTotalPages - 1),
+  );
+
+  const actionButtons = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(LINKS_BUTTON_ID).setLabel('Add / Update Links (Required)').setStyle(ButtonStyle.Secondary).setDisabled(disabled || !categoriesEnabled),
     new ButtonBuilder().setCustomId(SUBMIT_BUTTON_ID).setLabel('Submit Claim').setStyle(ButtonStyle.Success).setDisabled(disabled || !categoriesEnabled),
     new ButtonBuilder().setCustomId(CANCEL_BUTTON_ID).setLabel('Cancel').setStyle(ButtonStyle.Danger).setDisabled(disabled),
   );
@@ -180,7 +231,8 @@ function buildRows(draft: ClaimDraft, disabled = false) {
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(characterSelect),
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(periodSelect),
     new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(categoriesSelect),
-    buttons,
+    pagerButtons,
+    actionButtons,
   ];
 }
 
@@ -208,6 +260,8 @@ export async function startClaimWizard(
     availableCharacters: context.activeCharacters,
     openPeriods: context.openPeriods,
     currentNight: context.currentNight,
+    characterPage: pageForValue(context.activeCharacters, characterName),
+    periodPage: pageForValue(context.openPeriods, playPeriod),
     categories: [],
     links: {},
     createdAt: Date.now(),
@@ -236,11 +290,13 @@ export async function handleClaimWizardSelect(interaction: StringSelectMenuInter
   if (interaction.customId === CHARACTER_MENU_ID) {
     const value = interaction.values[0];
     draft.characterName = value === '__none__' ? undefined : value;
+    draft.characterPage = pageForValue(draft.availableCharacters, draft.characterName);
   }
 
   if (interaction.customId === PERIOD_MENU_ID) {
     const value = interaction.values[0];
     draft.playPeriod = value === '__none__' ? undefined : value;
+    draft.periodPage = pageForValue(draft.openPeriods, draft.playPeriod);
   }
 
   if (interaction.customId === CATEGORIES_MENU_ID) {
@@ -263,6 +319,30 @@ export async function handleClaimWizardButton(interaction: ButtonInteraction, ad
   const draft = drafts.get(interaction.user.id);
   if (!draft) {
     await interaction.reply({ content: 'No active claim wizard. Run /xp submit again.', ephemeral: true });
+    return true;
+  }
+
+  if (interaction.customId === CHARACTER_PREV_ID) {
+    draft.characterPage = clampPage(draft.characterPage - 1, draft.availableCharacters);
+    await interaction.update({ content: renderDraft(draft), components: buildRows(draft) });
+    return true;
+  }
+
+  if (interaction.customId === CHARACTER_NEXT_ID) {
+    draft.characterPage = clampPage(draft.characterPage + 1, draft.availableCharacters);
+    await interaction.update({ content: renderDraft(draft), components: buildRows(draft) });
+    return true;
+  }
+
+  if (interaction.customId === PERIOD_PREV_ID) {
+    draft.periodPage = clampPage(draft.periodPage - 1, draft.openPeriods);
+    await interaction.update({ content: renderDraft(draft), components: buildRows(draft) });
+    return true;
+  }
+
+  if (interaction.customId === PERIOD_NEXT_ID) {
+    draft.periodPage = clampPage(draft.periodPage + 1, draft.openPeriods);
+    await interaction.update({ content: renderDraft(draft), components: buildRows(draft) });
     return true;
   }
 
@@ -314,7 +394,7 @@ export async function handleClaimWizardButton(interaction: ButtonInteraction, ad
     const missing = draft.categories.filter((k) => !draft.links[k]);
     if (missing.length > 0) {
       await interaction.reply({
-        content: `Missing links for: ${missing.map((k) => `\`${k}\``).join(', ')}. Click Add / Update Links first.`,
+        content: `Missing links for: ${missing.map((k) => `\`${k}\``).join(', ')}. Click Add / Update Links (Required) first.`,
         ephemeral: true,
       });
       return true;
