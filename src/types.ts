@@ -17,6 +17,12 @@ export type XpSummary = {
   availableXp: number;
 };
 
+export type ClaimContext = {
+  activeCharacters: string[];
+  openPeriods: string[];
+  currentNight: string | null;
+};
+
 export type ClaimPayload = {
   characterName: string;
   playPeriod: string;

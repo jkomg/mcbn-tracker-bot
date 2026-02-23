@@ -1,8 +1,9 @@
 import { z } from 'zod';
-import type { ClaimPayload, SpendPayload, XpSummary } from '../types';
+import type { ClaimContext, ClaimPayload, SpendPayload, XpSummary } from '../types';
 
 export interface TrackerAdapter {
   getSummary(characterName: string): Promise<XpSummary | null>;
+  getClaimContext(): Promise<ClaimContext>;
   submitClaim(payload: ClaimPayload): Promise<{ ok: boolean; message: string }>;
   submitSpend(payload: SpendPayload): Promise<{ ok: boolean; message: string }>;
 }
@@ -13,6 +14,12 @@ const summarySchema = z.object({
   totalXp: z.number(),
   totalSpends: z.number(),
   availableXp: z.number(),
+});
+
+const claimContextSchema = z.object({
+  activeCharacters: z.array(z.string()),
+  openPeriods: z.array(z.string()),
+  currentNight: z.string().nullable(),
 });
 
 export class WebAppAdapter implements TrackerAdapter {
@@ -34,6 +41,23 @@ export class WebAppAdapter implements TrackerAdapter {
 
     const raw = await resp.json();
     return summarySchema.parse(raw);
+  }
+
+  async getClaimContext(): Promise<ClaimContext> {
+    const resp = await fetch(`${this.baseUrl}/api/meta/claim-context`, {
+      headers: this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {},
+    }).catch(() => null);
+
+    if (!resp) {
+      throw new Error('Unable to reach web app API.');
+    }
+
+    if (!resp.ok) {
+      throw new Error(`Claim context API failed (${resp.status})`);
+    }
+
+    const raw = await resp.json();
+    return claimContextSchema.parse(raw);
   }
 
   async submitClaim(payload: ClaimPayload): Promise<{ ok: boolean; message: string }> {

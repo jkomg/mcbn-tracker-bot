@@ -24,6 +24,8 @@ const CATEGORY_OPTIONS = [
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
+const CHARACTER_MENU_ID = 'xp:submit:character';
+const PERIOD_MENU_ID = 'xp:submit:period';
 const CATEGORIES_MENU_ID = 'xp:submit:categories';
 const LINKS_BUTTON_ID = 'xp:submit:links';
 const SUBMIT_BUTTON_ID = 'xp:submit:confirm';
@@ -32,8 +34,11 @@ const LINKS_MODAL_ID = 'xp:submit:links-modal';
 const LINKS_INPUT_ID = 'links';
 
 type ClaimDraft = {
-  characterName: string;
-  playPeriod: string;
+  characterName?: string;
+  playPeriod?: string;
+  availableCharacters: string[];
+  openPeriods: string[];
+  currentNight: string | null;
   categories: string[];
   links: Record<string, string>;
   createdAt: number;
@@ -48,6 +53,13 @@ function cleanupExpiredDrafts() {
       drafts.delete(userId);
     }
   }
+}
+
+function truncateLabel(value: string, max = 100): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max - 1)}…`;
 }
 
 function getCategoryLabel(key: string): string {
@@ -91,8 +103,9 @@ function renderDraft(draft: ClaimDraft): string {
 
   return [
     '**XP Claim Wizard**',
-    `Character: **${draft.characterName}**`,
-    `Play period: **${draft.playPeriod}**`,
+    `Character: **${draft.characterName ?? 'not selected'}**`,
+    `Play period: **${draft.playPeriod ?? 'not selected'}**`,
+    draft.currentNight ? `Current night: **${draft.currentNight}**` : 'Current night: unavailable',
     '',
     '**Selected categories**',
     selected,
@@ -100,44 +113,101 @@ function renderDraft(draft: ClaimDraft): string {
     '**Link status**',
     linksSummary,
     '',
-    missingLinks.length
-      ? `Status: Missing links for ${missingLinks.length} selected categor${missingLinks.length === 1 ? 'y' : 'ies'}.`
-      : 'Status: Ready to submit.',
+    !draft.characterName || !draft.playPeriod
+      ? 'Status: Select character and play period to continue.'
+      : missingLinks.length
+        ? `Status: Missing links for ${missingLinks.length} selected categor${missingLinks.length === 1 ? 'y' : 'ies'}.`
+        : draft.categories.length
+          ? 'Status: Ready to submit.'
+          : 'Status: Select one or more categories.',
   ].join('\n');
 }
 
 function buildRows(draft: ClaimDraft, disabled = false) {
-  const select = new StringSelectMenuBuilder()
+  const characterOptions = draft.availableCharacters.slice(0, 25).map((name) =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(truncateLabel(name))
+      .setValue(name)
+      .setDefault(draft.characterName === name),
+  );
+
+  const periodOptions = draft.openPeriods.slice(0, 25).map((label) =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(truncateLabel(label))
+      .setValue(label)
+      .setDefault(draft.playPeriod === label),
+  );
+
+  const characterSelect = new StringSelectMenuBuilder()
+    .setCustomId(CHARACTER_MENU_ID)
+    .setPlaceholder(characterOptions.length ? 'Select character' : 'No active characters available')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(disabled || characterOptions.length === 0)
+    .addOptions(characterOptions.length ? characterOptions : [new StringSelectMenuOptionBuilder().setLabel('No characters').setValue('__none__')]);
+
+  const periodSelect = new StringSelectMenuBuilder()
+    .setCustomId(PERIOD_MENU_ID)
+    .setPlaceholder(periodOptions.length ? 'Select play period' : 'No open periods available')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(disabled || periodOptions.length === 0)
+    .addOptions(periodOptions.length ? periodOptions : [new StringSelectMenuOptionBuilder().setLabel('No periods').setValue('__none__')]);
+
+  const categoriesEnabled = !!draft.characterName && !!draft.playPeriod;
+  const categoriesSelect = new StringSelectMenuBuilder()
     .setCustomId(CATEGORIES_MENU_ID)
     .setPlaceholder('Select claimed categories')
     .setMinValues(1)
     .setMaxValues(CATEGORY_OPTIONS.length)
-    .setDisabled(disabled)
+    .setDisabled(disabled || !categoriesEnabled)
     .addOptions(
       CATEGORY_OPTIONS.map((c) =>
-        new StringSelectMenuOptionBuilder().setLabel(c.label).setValue(c.key).setDefault(draft.categories.includes(c.key)),
+        new StringSelectMenuOptionBuilder()
+          .setLabel(c.label)
+          .setValue(c.key)
+          .setDefault(draft.categories.includes(c.key)),
       ),
     );
 
   const buttons = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(LINKS_BUTTON_ID).setLabel('Add / Update Links').setStyle(ButtonStyle.Secondary).setDisabled(disabled),
-    new ButtonBuilder().setCustomId(SUBMIT_BUTTON_ID).setLabel('Submit Claim').setStyle(ButtonStyle.Success).setDisabled(disabled),
+    new ButtonBuilder().setCustomId(LINKS_BUTTON_ID).setLabel('Add / Update Links').setStyle(ButtonStyle.Secondary).setDisabled(disabled || !categoriesEnabled),
+    new ButtonBuilder().setCustomId(SUBMIT_BUTTON_ID).setLabel('Submit Claim').setStyle(ButtonStyle.Success).setDisabled(disabled || !categoriesEnabled),
     new ButtonBuilder().setCustomId(CANCEL_BUTTON_ID).setLabel('Cancel').setStyle(ButtonStyle.Danger).setDisabled(disabled),
   );
 
-  return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select), buttons];
+  return [
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(characterSelect),
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(periodSelect),
+    new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(categoriesSelect),
+    buttons,
+  ];
 }
 
 export async function startClaimWizard(
   interaction: any,
-  characterName: string,
-  playPeriod: string,
+  adapter: TrackerAdapter,
+  initialCharacter?: string,
+  initialPlayPeriod?: string,
 ) {
   cleanupExpiredDrafts();
+
+  const context = await adapter.getClaimContext();
+
+  const characterName = initialCharacter && context.activeCharacters.includes(initialCharacter)
+    ? initialCharacter
+    : undefined;
+
+  const playPeriod = initialPlayPeriod && context.openPeriods.includes(initialPlayPeriod)
+    ? initialPlayPeriod
+    : context.currentNight ?? undefined;
 
   const draft: ClaimDraft = {
     characterName,
     playPeriod,
+    availableCharacters: context.activeCharacters,
+    openPeriods: context.openPeriods,
+    currentNight: context.currentNight,
     categories: [],
     links: {},
     createdAt: Date.now(),
@@ -152,7 +222,7 @@ export async function startClaimWizard(
 }
 
 export async function handleClaimWizardSelect(interaction: StringSelectMenuInteraction) {
-  if (interaction.customId !== CATEGORIES_MENU_ID) {
+  if (!interaction.customId.startsWith('xp:submit:')) {
     return false;
   }
 
@@ -163,7 +233,19 @@ export async function handleClaimWizardSelect(interaction: StringSelectMenuInter
     return true;
   }
 
-  draft.categories = [...interaction.values];
+  if (interaction.customId === CHARACTER_MENU_ID) {
+    const value = interaction.values[0];
+    draft.characterName = value === '__none__' ? undefined : value;
+  }
+
+  if (interaction.customId === PERIOD_MENU_ID) {
+    const value = interaction.values[0];
+    draft.playPeriod = value === '__none__' ? undefined : value;
+  }
+
+  if (interaction.customId === CATEGORIES_MENU_ID) {
+    draft.categories = [...interaction.values];
+  }
 
   await interaction.update({
     content: renderDraft(draft),
@@ -185,6 +267,11 @@ export async function handleClaimWizardButton(interaction: ButtonInteraction, ad
   }
 
   if (interaction.customId === LINKS_BUTTON_ID) {
+    if (!draft.characterName || !draft.playPeriod) {
+      await interaction.reply({ content: 'Select character and play period first.', ephemeral: true });
+      return true;
+    }
+
     const modal = new ModalBuilder().setCustomId(LINKS_MODAL_ID).setTitle('Set Evidence Links');
 
     const hint = draft.categories.length
@@ -214,6 +301,11 @@ export async function handleClaimWizardButton(interaction: ButtonInteraction, ad
   }
 
   if (interaction.customId === SUBMIT_BUTTON_ID) {
+    if (!draft.characterName || !draft.playPeriod) {
+      await interaction.reply({ content: 'Select character and play period first.', ephemeral: true });
+      return true;
+    }
+
     if (draft.categories.length === 0) {
       await interaction.reply({ content: 'Select at least one category first.', ephemeral: true });
       return true;

@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { calculateXpCost } from '../xpRules';
 import { startClaimWizard } from '../interactiveClaimWizard';
+import { calculateXpCost } from '../xpRules';
 
 export const data = new SlashCommandBuilder()
   .setName('xp')
@@ -8,9 +8,9 @@ export const data = new SlashCommandBuilder()
   .addSubcommand((s) =>
     s
       .setName('submit')
-      .setDescription('Open interactive XP claim wizard')
-      .addStringOption((o) => o.setName('character').setDescription('Character name').setRequired(true))
-      .addStringOption((o) => o.setName('play_period').setDescription('Period label').setRequired(true)),
+      .setDescription('Open interactive XP claim wizard with live character/night context')
+      .addStringOption((o) => o.setName('character').setDescription('Optional preselected character name').setRequired(false))
+      .addStringOption((o) => o.setName('play_period').setDescription('Optional preselected period label').setRequired(false)),
   )
   .addSubcommand((s) =>
     s
@@ -86,9 +86,9 @@ export async function execute(interaction: any, { adapter }: any) {
   const sub = interaction.options.getSubcommand();
 
   if (sub === 'submit') {
-    const character = interaction.options.getString('character', true);
-    const playPeriod = interaction.options.getString('play_period', true);
-    await startClaimWizard(interaction, character, playPeriod);
+    const character = interaction.options.getString('character') ?? undefined;
+    const playPeriod = interaction.options.getString('play_period') ?? undefined;
+    await startClaimWizard(interaction, adapter, character, playPeriod);
     return;
   }
 
