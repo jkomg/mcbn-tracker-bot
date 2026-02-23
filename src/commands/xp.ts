@@ -1,9 +1,17 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { calculateXpCost } from '../xpRules';
+import { startClaimWizard } from '../interactiveClaimWizard';
 
 export const data = new SlashCommandBuilder()
   .setName('xp')
   .setDescription('XP workflow bridge commands')
+  .addSubcommand((s) =>
+    s
+      .setName('submit')
+      .setDescription('Open interactive XP claim wizard')
+      .addStringOption((o) => o.setName('character').setDescription('Character name').setRequired(true))
+      .addStringOption((o) => o.setName('play_period').setDescription('Period label').setRequired(true)),
+  )
   .addSubcommand((s) =>
     s
       .setName('summary')
@@ -76,6 +84,13 @@ export const name = 'xp';
 
 export async function execute(interaction: any, { adapter }: any) {
   const sub = interaction.options.getSubcommand();
+
+  if (sub === 'submit') {
+    const character = interaction.options.getString('character', true);
+    const playPeriod = interaction.options.getString('play_period', true);
+    await startClaimWizard(interaction, character, playPeriod);
+    return;
+  }
 
   if (sub === 'summary') {
     const character = interaction.options.getString('character', true);

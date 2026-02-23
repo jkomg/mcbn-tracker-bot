@@ -2,6 +2,11 @@ import 'dotenv/config';
 import { Client, GatewayIntentBits } from 'discord.js';
 import { initClientCommandCollection, registerCommands } from './registerCommands';
 import { WebAppAdapter } from './services/adapter';
+import {
+  handleClaimWizardButton,
+  handleClaimWizardModal,
+  handleClaimWizardSelect,
+} from './interactiveClaimWizard';
 
 const token = process.env.BOT_TOKEN;
 if (!token) {
@@ -24,23 +29,49 @@ client.once('ready', async () => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) {
-    return;
-  }
-
-  const cmd = (client as any).commands.get(interaction.commandName);
-  if (!cmd) {
-    return;
-  }
-
   try {
+    if (interaction.isStringSelectMenu()) {
+      const handled = await handleClaimWizardSelect(interaction);
+      if (handled) {
+        return;
+      }
+    }
+
+    if (interaction.isButton()) {
+      const handled = await handleClaimWizardButton(interaction, adapter);
+      if (handled) {
+        return;
+      }
+    }
+
+    if (interaction.isModalSubmit()) {
+      const handled = await handleClaimWizardModal(interaction);
+      if (handled) {
+        return;
+      }
+    }
+
+    if (!interaction.isChatInputCommand()) {
+      return;
+    }
+
+    const cmd = (client as any).commands.get(interaction.commandName);
+    if (!cmd) {
+      return;
+    }
+
     await cmd.execute(interaction, { client, adapter });
   } catch (error) {
     console.error('Command failure', error);
+    if (!interaction.isRepliable()) {
+      return;
+    }
+
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp({ content: 'Command failed.', ephemeral: true });
       return;
     }
+
     await interaction.reply({ content: 'Command failed.', ephemeral: true });
   }
 });
