@@ -48,3 +48,29 @@ npm run dev
 2. Add auth between bot and web app API (token or signed HMAC).
 3. Expand command parity with web UI flows (review queues, approvals, roster, periods).
 4. Add guild-to-chronicle config and role-based permissions.
+
+## Side-by-side test setup (with isolated web-app clone)
+
+Use the isolated Flask clone at:
+`/Users/jasonkennedy/Projects/mcbn-xp-tracker-bot-test`
+
+1. In that clone, set `.env` with a test `WEB_APP_API_TOKEN` and your Sheets credentials.
+2. Start clone on port 5002:
+   ```bash
+   ./dev-bot-test.sh
+   ```
+3. In this bot project, set `.env`:
+   ```env
+   WEB_APP_BASE_URL=http://127.0.0.1:5002
+   WEB_APP_API_TOKEN=<same token as Flask clone>
+   ```
+4. Start bot:
+   ```bash
+   npm run dev
+   ```
+
+Then test with slash commands:
+- `/xp summary`
+- `/xp claim`
+- `/xp spend`
+- `/xp spend-cost`

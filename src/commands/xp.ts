@@ -21,6 +21,34 @@ export const data = new SlashCommandBuilder()
   )
   .addSubcommand((s) =>
     s
+      .setName('spend')
+      .setDescription('Submit an XP spend request via adapter')
+      .addStringOption((o) => o.setName('character').setDescription('Character name').setRequired(true))
+      .addStringOption((o) =>
+        o
+          .setName('category')
+          .setDescription('Spend category')
+          .setRequired(true)
+          .addChoices(
+            { name: 'Attribute', value: 'Attribute' },
+            { name: 'Skill', value: 'Skill' },
+            { name: 'New Skill', value: 'New Skill' },
+            { name: 'Discipline (In-Clan)', value: 'Discipline (In-Clan)' },
+            { name: 'Discipline (Out-of-Clan)', value: 'Discipline (Out-of-Clan)' },
+            { name: 'Caitiff Discipline', value: 'Caitiff Discipline' },
+            { name: 'Blood Sorcery Ritual', value: 'Blood Sorcery Ritual' },
+            { name: 'Thin-Blood Alchemy Formula', value: 'Thin-Blood Alchemy Formula' },
+            { name: 'Advantage (Merit/Background)', value: 'Advantage (Merit/Background)' },
+          ),
+      )
+      .addStringOption((o) => o.setName('trait').setDescription('Trait name').setRequired(true))
+      .addIntegerOption((o) => o.setName('current_dots').setDescription('Current dots').setRequired(true))
+      .addIntegerOption((o) => o.setName('new_dots').setDescription('New dots').setRequired(true))
+      .addBooleanOption((o) => o.setName('is_in_clan').setDescription('In-clan discipline?').setRequired(false))
+      .addStringOption((o) => o.setName('justification').setDescription('RP rationale').setRequired(true)),
+  )
+  .addSubcommand((s) =>
+    s
       .setName('spend-cost')
       .setDescription('Compute V5 XP cost for a spend request')
       .addStringOption((o) =>
@@ -82,6 +110,29 @@ export async function execute(interaction: any, { adapter }: any) {
       categories: {
         [category]: link,
       },
+    });
+
+    await interaction.reply({ content: result.message, ephemeral: true });
+    return;
+  }
+
+  if (sub === 'spend') {
+    const character = interaction.options.getString('character', true);
+    const spendCategory = interaction.options.getString('category', true);
+    const traitName = interaction.options.getString('trait', true);
+    const currentDots = interaction.options.getInteger('current_dots', true);
+    const newDots = interaction.options.getInteger('new_dots', true);
+    const isInClan = interaction.options.getBoolean('is_in_clan') ?? false;
+    const justification = interaction.options.getString('justification', true);
+
+    const result = await adapter.submitSpend({
+      characterName: character,
+      spendCategory: spendCategory as any,
+      traitName,
+      currentDots,
+      newDots,
+      isInClan,
+      justification,
     });
 
     await interaction.reply({ content: result.message, ephemeral: true });
