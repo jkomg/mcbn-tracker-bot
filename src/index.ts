@@ -13,7 +13,7 @@ const webAppToken = process.env.WEB_APP_API_TOKEN;
 const adapter = new WebAppAdapter(webAppBaseUrl, webAppToken);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [GatewayIntentBits.Guilds],
 });
 
 initClientCommandCollection(client);
