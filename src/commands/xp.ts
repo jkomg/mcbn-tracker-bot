@@ -44,8 +44,8 @@ export const data = new SlashCommandBuilder()
       .addStringOption((o) => o.setName('trait').setDescription('Trait name').setRequired(true))
       .addIntegerOption((o) => o.setName('current_dots').setDescription('Current dots').setRequired(true))
       .addIntegerOption((o) => o.setName('new_dots').setDescription('New dots').setRequired(true))
-      .addBooleanOption((o) => o.setName('is_in_clan').setDescription('In-clan discipline?').setRequired(false))
-      .addStringOption((o) => o.setName('justification').setDescription('RP rationale').setRequired(true)),
+      .addStringOption((o) => o.setName('justification').setDescription('RP rationale').setRequired(true))
+      .addBooleanOption((o) => o.setName('is_in_clan').setDescription('In-clan discipline?').setRequired(false)),
   )
   .addSubcommand((s) =>
     s
