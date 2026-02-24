@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { Client, GatewayIntentBits } from 'discord.js';
 import { initClientCommandCollection, registerCommands } from './registerCommands';
 import { WebAppAdapter } from './services/adapter';
+import { errorToMessage, logEvent } from './logger';
 import {
   handleClaimWizardButton,
   handleClaimWizardModal,
@@ -24,15 +25,23 @@ const client = new Client({
 initClientCommandCollection(client);
 
 client.once('ready', async () => {
-  console.log(`Bot ready as ${client.user?.tag}`);
+  logEvent('info', 'bot_ready', { userTag: client.user?.tag });
   await registerCommands(client);
 });
 
 client.on('interactionCreate', async (interaction) => {
+  const baseMeta = {
+    interactionId: interaction.id,
+    interactionType: interaction.type,
+    userId: interaction.user?.id,
+    guildId: interaction.guildId,
+  };
+
   try {
     if (interaction.isStringSelectMenu()) {
       const handled = await handleClaimWizardSelect(interaction);
       if (handled) {
+        logEvent('info', 'interaction_handled_select', { ...baseMeta, customId: interaction.customId });
         return;
       }
     }
@@ -40,6 +49,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton()) {
       const handled = await handleClaimWizardButton(interaction, adapter);
       if (handled) {
+        logEvent('info', 'interaction_handled_button', { ...baseMeta, customId: interaction.customId });
         return;
       }
     }
@@ -47,6 +57,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isModalSubmit()) {
       const handled = await handleClaimWizardModal(interaction);
       if (handled) {
+        logEvent('info', 'interaction_handled_modal', { ...baseMeta, customId: interaction.customId });
         return;
       }
     }
@@ -60,16 +71,18 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
+    logEvent('info', 'command_execute_start', { ...baseMeta, commandName: interaction.commandName });
     await cmd.execute(interaction, { client, adapter });
+    logEvent('info', 'command_execute_done', { ...baseMeta, commandName: interaction.commandName });
   } catch (error: any) {
     const code = error?.code;
     // 40060 means another process/handler already acknowledged this interaction.
     if (code === 40060) {
-      console.warn('Ignoring already-acknowledged interaction (code 40060).');
+      logEvent('warn', 'interaction_acknowledged_elsewhere', { ...baseMeta, code });
       return;
     }
 
-    console.error('Command failure', error);
+    logEvent('error', 'command_failure', { ...baseMeta, code, error: errorToMessage(error) });
     if (!interaction.isRepliable()) {
       return;
     }

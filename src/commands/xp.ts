@@ -1,5 +1,6 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { startClaimWizard } from '../interactiveClaimWizard';
+import { errorToMessage, logEvent } from '../logger';
 import { calculateXpCost } from '../xpRules';
 
 export const data = new SlashCommandBuilder()
@@ -78,22 +79,44 @@ export const data = new SlashCommandBuilder()
       )
       .addIntegerOption((o) => o.setName('current_dots').setDescription('Current dots').setRequired(true))
       .addIntegerOption((o) => o.setName('new_dots').setDescription('New dots').setRequired(true)),
+  )
+  .addSubcommand((s) =>
+    s
+      .setName('health')
+      .setDescription('Check bot-to-web API health, latency, and claim-context freshness'),
   );
 
 export const name = 'xp';
 
 export async function execute(interaction: any, { adapter }: any) {
   const sub = interaction.options.getSubcommand();
+  const meta = {
+    interactionId: interaction.id,
+    userId: interaction.user?.id,
+    guildId: interaction.guildId,
+    subcommand: sub,
+  };
 
   if (sub === 'submit') {
+    logEvent('info', 'xp_submit_start', meta);
     const character = interaction.options.getString('character') ?? undefined;
     const playPeriod = interaction.options.getString('play_period') ?? undefined;
-    await startClaimWizard(interaction, adapter, character, playPeriod);
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      await startClaimWizard(interaction, adapter, character, playPeriod);
+      logEvent('info', 'xp_submit_ready', meta);
+    } catch (error) {
+      logEvent('error', 'xp_submit_failed', { ...meta, error: errorToMessage(error) });
+      const message =
+        'Unable to load claim context from the web app right now (temporary API issue). Please retry in a minute.';
+      await interaction.editReply({ content: message, components: [] });
+    }
     return;
   }
 
   if (sub === 'summary') {
     const character = interaction.options.getString('character', true);
+    logEvent('info', 'xp_summary_start', { ...meta, character });
     const summary = await adapter.getSummary(character);
     if (!summary) {
       await interaction.reply({ content: `No summary found for ${character}.`, ephemeral: true });
@@ -127,6 +150,7 @@ export async function execute(interaction: any, { adapter }: any) {
       },
     });
 
+    logEvent('info', 'xp_claim_result', { ...meta, character, playPeriod, category, ok: result.ok });
     await interaction.reply({ content: result.message, ephemeral: true });
     return;
   }
@@ -150,6 +174,15 @@ export async function execute(interaction: any, { adapter }: any) {
       justification,
     });
 
+    logEvent('info', 'xp_spend_result', {
+      ...meta,
+      character,
+      spendCategory,
+      traitName,
+      currentDots,
+      newDots,
+      ok: result.ok,
+    });
     await interaction.reply({ content: result.message, ephemeral: true });
     return;
   }
@@ -161,10 +194,63 @@ export async function execute(interaction: any, { adapter }: any) {
 
     try {
       const cost = calculateXpCost(category as any, currentDots, newDots);
+      logEvent('info', 'xp_spend_cost', { ...meta, category, currentDots, newDots, cost });
       await interaction.reply({ content: `Calculated cost: **${cost} XP**`, ephemeral: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid request.';
+      logEvent('warn', 'xp_spend_cost_invalid', { ...meta, category, currentDots, newDots, message });
       await interaction.reply({ content: message, ephemeral: true });
     }
+    return;
+  }
+
+  if (sub === 'health') {
+    const startedAt = Date.now();
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      const report = await adapter.getHealthReport();
+      const totalMs = Date.now() - startedAt;
+      const claim = report.claimContext;
+      const web = report.webApi;
+
+      const lines = [
+        `Checked: ${report.timestamp}`,
+        `Total probe time: ${totalMs}ms`,
+        '',
+        `Web API: ${web.ok ? 'OK' : 'FAIL'} (status ${web.status ?? 'n/a'}, ${web.latencyMs}ms)`,
+      ];
+
+      if (web.error) {
+        lines.push(`Web API error: ${web.error}`);
+      }
+
+      lines.push(
+        `Claim context: ${claim.ok ? 'OK' : 'FAIL'} (${claim.latencyMs}ms)` +
+          (claim.source ? `, source=${claim.source}` : '') +
+          (typeof claim.retries === 'number' ? `, retries=${claim.retries}` : '') +
+          (typeof claim.cacheAgeMs === 'number' ? `, cacheAge=${claim.cacheAgeMs}ms` : ''),
+      );
+
+      if (claim.ok) {
+        lines.push(
+          `Context payload: ${claim.activeCharacters ?? 0} characters, ${claim.openPeriods ?? 0} periods, current=${claim.currentNight ?? 'none'}`,
+        );
+      } else if (claim.error) {
+        lines.push(`Claim context error: ${claim.error}`);
+      }
+
+      await interaction.editReply({ content: lines.join('\n') });
+      logEvent('info', 'xp_health_report', {
+        ...meta,
+        totalMs,
+        webApi: report.webApi,
+        claimContext: report.claimContext,
+      });
+    } catch (error) {
+      const message = `Health check failed: ${errorToMessage(error)}`;
+      await interaction.editReply({ content: message });
+      logEvent('error', 'xp_health_failed', { ...meta, error: errorToMessage(error) });
+    }
+    return;
   }
 }

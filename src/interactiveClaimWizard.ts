@@ -274,11 +274,17 @@ export async function startClaimWizard(
   };
   drafts.set(interaction.user.id, draft);
 
-  await interaction.reply({
+  const response = {
     content: renderDraft(draft),
     components: buildRows(draft),
-    ephemeral: true,
-  });
+  };
+
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply(response);
+    return;
+  }
+
+  await interaction.reply({ ...response, ephemeral: true });
 }
 
 export async function handleClaimWizardSelect(interaction: StringSelectMenuInteraction) {

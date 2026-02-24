@@ -38,3 +38,25 @@ export type SpendPayload = {
   isInClan: boolean;
   justification: string;
 };
+
+export type ApiProbe = {
+  ok: boolean;
+  status?: number;
+  latencyMs: number;
+  error?: string;
+};
+
+export type ClaimContextProbe = ApiProbe & {
+  source?: 'cache' | 'network' | 'stale-cache';
+  retries?: number;
+  cacheAgeMs?: number;
+  activeCharacters?: number;
+  openPeriods?: number;
+  currentNight?: string | null;
+};
+
+export type AdapterHealthReport = {
+  timestamp: string;
+  webApi: ApiProbe;
+  claimContext: ClaimContextProbe;
+};
