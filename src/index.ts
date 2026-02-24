@@ -61,7 +61,14 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     await cmd.execute(interaction, { client, adapter });
-  } catch (error) {
+  } catch (error: any) {
+    const code = error?.code;
+    // 40060 means another process/handler already acknowledged this interaction.
+    if (code === 40060) {
+      console.warn('Ignoring already-acknowledged interaction (code 40060).');
+      return;
+    }
+
     console.error('Command failure', error);
     if (!interaction.isRepliable()) {
       return;

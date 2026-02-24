@@ -23,6 +23,7 @@ const CATEGORY_OPTIONS = [
 ] as const;
 
 const PAGE_SIZE = 25;
+const MODAL_FIELD_LIMIT = 5;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
 const CHARACTER_MENU_ID = 'xp:submit:character';
@@ -35,8 +36,7 @@ const PERIOD_NEXT_ID = 'xp:submit:period-next';
 const LINKS_BUTTON_ID = 'xp:submit:links';
 const SUBMIT_BUTTON_ID = 'xp:submit:confirm';
 const CANCEL_BUTTON_ID = 'xp:submit:cancel';
-const LINKS_MODAL_ID = 'xp:submit:links-modal';
-const LINKS_INPUT_ID = 'links';
+const LINKS_MODAL_PREFIX = 'xp:submit:links-modal';
 
 type ClaimDraft = {
   characterName?: string;
@@ -73,29 +73,6 @@ function getCategoryLabel(key: string): string {
   return CATEGORY_OPTIONS.find((c) => c.key === key)?.label ?? key;
 }
 
-function parseLinkLines(raw: string): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-
-    const idx = trimmed.indexOf('=');
-    if (idx <= 0) {
-      continue;
-    }
-
-    const key = trimmed.slice(0, idx).trim();
-    const value = trimmed.slice(idx + 1).trim();
-    if (!key || !value) {
-      continue;
-    }
-    map[key] = value;
-  }
-  return map;
-}
-
 function pageCount(values: string[]): number {
   return Math.max(1, Math.ceil(values.length / PAGE_SIZE));
 }
@@ -119,6 +96,35 @@ function pageForValue(values: string[], value?: string): number {
     return 0;
   }
   return Math.floor(idx / PAGE_SIZE);
+}
+
+function modalIdForBatch(keys: string[]): string {
+  return `${LINKS_MODAL_PREFIX}:${keys.join(',')}`;
+}
+
+function parseModalKeys(customId: string): string[] {
+  if (!customId.startsWith(`${LINKS_MODAL_PREFIX}:`)) {
+    return [];
+  }
+  const encoded = customId.slice(`${LINKS_MODAL_PREFIX}:`.length);
+  return encoded
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function linkInputIdForKey(key: string): string {
+  return `link:${key}`;
+}
+
+function nextModalBatchKeys(draft: ClaimDraft): string[] {
+  const missingFirst = [...draft.categories].sort((a, b) => {
+    const aMissing = !draft.links[a];
+    const bMissing = !draft.links[b];
+    if (aMissing === bMissing) return 0;
+    return aMissing ? -1 : 1;
+  });
+  return missingFirst.slice(0, MODAL_FIELD_LIMIT);
 }
 
 function renderDraft(draft: ClaimDraft): string {
@@ -145,8 +151,8 @@ function renderDraft(draft: ClaimDraft): string {
     '**Link status**',
     linksSummary,
     '',
-    'Link entry format: `category_key=https://discord.com/channels/...`',
     'After selecting categories, click **Add / Update Links (Required)**.',
+    'The modal now shows one input field per selected category.',
     '',
     !draft.characterName || !draft.playPeriod
       ? 'Status: Select character and play period to continue.'
@@ -352,21 +358,32 @@ export async function handleClaimWizardButton(interaction: ButtonInteraction, ad
       return true;
     }
 
-    const modal = new ModalBuilder().setCustomId(LINKS_MODAL_ID).setTitle('Set Evidence Links');
+    if (draft.categories.length === 0) {
+      await interaction.reply({ content: 'Select one or more categories first.', ephemeral: true });
+      return true;
+    }
 
-    const hint = draft.categories.length
-      ? `Use one per line: key=https://discord.com/...\n${draft.categories.map((k) => `- ${k}`).join('\n')}`
-      : 'Use one per line: key=https://discord.com/...';
+    const keys = nextModalBatchKeys(draft);
+    if (!keys.length) {
+      await interaction.reply({ content: 'No selected categories to collect links for.', ephemeral: true });
+      return true;
+    }
 
-    const input = new TextInputBuilder()
-      .setCustomId(LINKS_INPUT_ID)
-      .setLabel('category_key=message_link pairs')
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(true)
-      .setPlaceholder(hint.slice(0, 100))
-      .setValue(draft.categories.map((k) => `${k}=${draft.links[k] ?? ''}`).join('\n').slice(0, 3900));
+    const modal = new ModalBuilder()
+      .setCustomId(modalIdForBatch(keys))
+      .setTitle(`Evidence Links (${keys.length}/${draft.categories.length})`);
 
-    modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+    for (const key of keys) {
+      const input = new TextInputBuilder()
+        .setCustomId(linkInputIdForKey(key))
+        .setLabel(truncateLabel(getCategoryLabel(key), 45))
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setPlaceholder('https://discord.com/channels/...')
+        .setValue((draft.links[key] ?? '').slice(0, 400));
+      modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
+    }
+
     await interaction.showModal(modal);
     return true;
   }
@@ -423,7 +440,7 @@ export async function handleClaimWizardButton(interaction: ButtonInteraction, ad
 }
 
 export async function handleClaimWizardModal(interaction: ModalSubmitInteraction) {
-  if (interaction.customId !== LINKS_MODAL_ID) {
+  if (!interaction.customId.startsWith(`${LINKS_MODAL_PREFIX}:`)) {
     return false;
   }
 
@@ -434,13 +451,24 @@ export async function handleClaimWizardModal(interaction: ModalSubmitInteraction
     return true;
   }
 
-  const raw = interaction.fields.getTextInputValue(LINKS_INPUT_ID);
-  const parsed = parseLinkLines(raw);
-  draft.links = { ...draft.links, ...parsed };
+  const keys = parseModalKeys(interaction.customId);
+  if (!keys.length) {
+    await interaction.reply({ content: 'Invalid links modal payload.', ephemeral: true });
+    return true;
+  }
 
-  const matched = draft.categories.filter((k) => parsed[k]).length;
+  for (const key of keys) {
+    const value = interaction.fields.getTextInputValue(linkInputIdForKey(key)).trim();
+    if (value) {
+      draft.links[key] = value;
+    }
+  }
+
+  const missing = draft.categories.filter((k) => !draft.links[k]);
   await interaction.reply({
-    content: `Saved link entries. Matched ${matched}/${draft.categories.length} selected categories.`,
+    content: missing.length
+      ? `Saved links. ${missing.length} selected categor${missing.length === 1 ? 'y is' : 'ies are'} still missing links. Click **Add / Update Links (Required)** again.`
+      : 'Saved links for all selected categories. You can now submit.',
     ephemeral: true,
   });
   return true;
