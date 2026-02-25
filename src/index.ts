@@ -38,6 +38,15 @@ client.on('interactionCreate', async (interaction) => {
   };
 
   try {
+    if (interaction.isAutocomplete()) {
+      const cmd = (client as any).commands.get(interaction.commandName);
+      if (!cmd?.autocomplete) {
+        return;
+      }
+      await cmd.autocomplete(interaction, { client, adapter });
+      return;
+    }
+
     if (interaction.isStringSelectMenu()) {
       const handled = await handleClaimWizardSelect(interaction);
       if (handled) {

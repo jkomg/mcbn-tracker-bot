@@ -10,7 +10,13 @@ export const data = new SlashCommandBuilder()
     s
       .setName('submit')
       .setDescription('Open interactive XP claim wizard with live character/night context')
-      .addStringOption((o) => o.setName('character').setDescription('Optional preselected character name').setRequired(false))
+      .addStringOption((o) =>
+        o
+          .setName('character')
+          .setDescription('Optional preselected character name')
+          .setAutocomplete(true)
+          .setRequired(false),
+      )
       .addStringOption((o) => o.setName('play_period').setDescription('Optional preselected period label').setRequired(false)),
   )
   .addSubcommand((s) =>
@@ -87,6 +93,37 @@ export const data = new SlashCommandBuilder()
   );
 
 export const name = 'xp';
+
+export async function autocomplete(interaction: any, { adapter }: any) {
+  const option = interaction.options.getFocused(true);
+  const sub = interaction.options.getSubcommand(false);
+  if (sub !== 'submit' || option.name !== 'character') {
+    await interaction.respond([]);
+    return;
+  }
+
+  try {
+    const query = String(option.value ?? '').trim().toLowerCase();
+    const context = await adapter.getClaimContext();
+    const values = context.activeCharacters;
+
+    const startsWith = values.filter((v: string) => v.toLowerCase().startsWith(query));
+    const includes = values.filter(
+      (v: string) => !v.toLowerCase().startsWith(query) && v.toLowerCase().includes(query),
+    );
+
+    const ranked = [...startsWith, ...includes].slice(0, 25);
+    await interaction.respond(ranked.map((name: string) => ({ name, value: name })));
+  } catch (error) {
+    logEvent('warn', 'xp_submit_autocomplete_failed', {
+      interactionId: interaction.id,
+      userId: interaction.user?.id,
+      guildId: interaction.guildId,
+      error: errorToMessage(error),
+    });
+    await interaction.respond([]);
+  }
+}
 
 export async function execute(interaction: any, { adapter }: any) {
   const sub = interaction.options.getSubcommand();
