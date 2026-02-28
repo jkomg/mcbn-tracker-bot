@@ -9,6 +9,14 @@ export type XpSpendCategory =
   | 'Thin-Blood Alchemy Formula'
   | 'Advantage (Merit/Background)';
 
+export type XpClaimCategory =
+  | 'posted_once'
+  | 'hunting_awakening'
+  | 'scene_with_another'
+  | 'conflict'
+  | 'combat'
+  | 'unmitigated_stain';
+
 export type XpSummary = {
   characterName: string;
   earnedXp: number;
@@ -26,7 +34,7 @@ export type ClaimContext = {
 export type ClaimPayload = {
   characterName: string;
   playPeriod: string;
-  categories: Record<string, string>;
+  categories: Partial<Record<XpClaimCategory, string>>;
 };
 
 export type SpendPayload = {

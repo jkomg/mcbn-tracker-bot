@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits } from 'discord.js';
+import { config } from './config';
+import type { BotClient } from './discord';
 import { initClientCommandCollection, registerCommands } from './registerCommands';
 import { WebAppAdapter } from './services/adapter';
 import { errorToMessage, logEvent } from './logger';
@@ -9,18 +11,17 @@ import {
   handleClaimWizardSelect,
 } from './interactiveClaimWizard';
 
-const token = process.env.BOT_TOKEN;
-if (!token) {
-  throw new Error('Missing BOT_TOKEN. Add it to .env');
-}
-
-const webAppBaseUrl = process.env.WEB_APP_BASE_URL ?? 'http://127.0.0.1:5001';
-const webAppToken = process.env.WEB_APP_API_TOKEN;
-const adapter = new WebAppAdapter(webAppBaseUrl, webAppToken);
+const adapter = new WebAppAdapter(config.webAppBaseUrl, config.webAppApiToken, {
+  requestTimeoutMs: config.requestTimeoutMs,
+  claimContextCacheTtlMs: config.claimContextCacheTtlMs,
+  claimContextStaleIfErrorMs: config.claimContextStaleIfErrorMs,
+  claimContextMaxRetries: config.claimContextMaxRetries,
+  claimContextRetryBaseMs: config.claimContextRetryBaseMs,
+});
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
-});
+}) as BotClient;
 
 initClientCommandCollection(client);
 
@@ -39,7 +40,7 @@ client.on('interactionCreate', async (interaction) => {
 
   try {
     if (interaction.isAutocomplete()) {
-      const cmd = (client as any).commands.get(interaction.commandName);
+      const cmd = client.commands.get(interaction.commandName);
       if (!cmd?.autocomplete) {
         return;
       }
@@ -75,7 +76,7 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
 
-    const cmd = (client as any).commands.get(interaction.commandName);
+    const cmd = client.commands.get(interaction.commandName);
     if (!cmd) {
       return;
     }
@@ -83,8 +84,8 @@ client.on('interactionCreate', async (interaction) => {
     logEvent('info', 'command_execute_start', { ...baseMeta, commandName: interaction.commandName });
     await cmd.execute(interaction, { client, adapter });
     logEvent('info', 'command_execute_done', { ...baseMeta, commandName: interaction.commandName });
-  } catch (error: any) {
-    const code = error?.code;
+  } catch (error) {
+    const code = (error as { code?: number }).code;
     // 40060 means another process/handler already acknowledged this interaction.
     if (code === 40060) {
       logEvent('warn', 'interaction_acknowledged_elsewhere', { ...baseMeta, code });
@@ -105,4 +106,4 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-client.login(token);
+client.login(config.botToken);

@@ -1,76 +1,87 @@
 # mcbn-tracker-bot
 
-Discord bot scaffold for MCbN XP tracking.
+Discord bot for MCbN XP workflows, built in TypeScript with a pluggable adapter layer for backend integration.
 
-This project is the starting point for a true Discord bot front-end that can:
-- mirror XP workflows from the Flask web app (`/Users/jasonkennedy/Projects/mcbn-xp-tracker`), and
-- reuse command/bot patterns from the original TypeScript bot scaffold (`/Users/jasonkennedy/Documents/Coding/mcbn-xp-tracker`).
+## Features
 
-## What is already wired
+- Slash commands for XP summary, claim submission, spend submission, spend cost checks, and health checks.
+- Interactive `/xp submit` wizard with paginated selection and required evidence links.
+- Adapter abstraction to decouple Discord UX from storage/business logic.
+- Structured JSON logging for production diagnostics.
+- Retry and stale-cache fallback for claim-context fetches.
 
-- Discord bot runtime and slash-command registration.
-- `/ping` command for runtime health.
-- `/xp summary` command calling a pluggable adapter.
-- `/xp claim` command posting claim payload to adapter.
-- `/xp spend-cost` command using V5 XP rules.
-- V5 XP rules ported to TypeScript from Flask `app/xp_rules.py`.
-- Discord message link parser/validator ported from the TS scaffold.
+## Security and Reliability Hardening
 
-## Integration model
+- Startup env validation via `zod` in `src/config.ts`.
+- `WEB_APP_BASE_URL` must be `https` unless targeting localhost.
+- API calls use request timeouts (`REQUEST_TIMEOUT_MS`) and bounded retries.
+- Claim links are validated as Discord message URLs and restricted to the current guild.
+- User-facing API errors are sanitized while detailed diagnostics are logged.
 
-This bot uses `TrackerAdapter` (`src/services/adapter.ts`) to decouple Discord command UX from backend storage/workflow.
+## Required Environment Variables
 
-Current implementation: `WebAppAdapter` expects future API endpoints on the Flask app:
-- `GET /api/characters/:name/summary`
-- `POST /api/claims`
-- `POST /api/spends`
+- `BOT_TOKEN`
+- `CLIENT_ID` (required for command registration)
 
-Those endpoints do not exist yet in the Flask app, so commands are scaffold-level right now.
+Optional:
 
-## Quick start
+- `TEST_GUILD_ID` (register commands only to a test guild)
+- `WEB_APP_BASE_URL` (default: `http://127.0.0.1:5001`)
+- `WEB_APP_API_TOKEN`
+- `REQUEST_TIMEOUT_MS` (default: `10000`)
+- `CLAIM_CONTEXT_CACHE_TTL_MS` (default: `30000`)
+- `CLAIM_CONTEXT_STALE_IF_ERROR_MS` (default: `300000`)
+- `CLAIM_CONTEXT_MAX_RETRIES` (default: `2`)
+- `CLAIM_CONTEXT_RETRY_BASE_MS` (default: `250`)
+
+## Quick Start
 
 ```bash
 cp .env.example .env
-# set BOT_TOKEN, CLIENT_ID, TEST_GUILD_ID
+npm install
 npm run dev
 ```
 
-## Scripts
+## Commands
 
-- `npm run dev` - run bot with tsx
-- `npm run build` - compile TypeScript
-- `npm run start` - run built bot
-- `npm run test` - run unit tests
-
-## Next implementation steps
-
-1. Add JSON API routes to Flask app for summary/claim/spend.
-2. Add auth between bot and web app API (token or signed HMAC).
-3. Expand command parity with web UI flows (review queues, approvals, roster, periods).
-4. Add guild-to-chronicle config and role-based permissions.
-
-## Side-by-side test setup (with isolated web-app clone)
-
-Use the isolated Flask clone at:
-`/Users/jasonkennedy/Projects/mcbn-xp-tracker-bot-test`
-
-1. In that clone, set `.env` with a test `WEB_APP_API_TOKEN` and your Sheets credentials.
-2. Start clone on port 5002:
-   ```bash
-   ./dev-bot-test.sh
-   ```
-3. In this bot project, set `.env`:
-   ```env
-   WEB_APP_BASE_URL=http://127.0.0.1:5002
-   WEB_APP_API_TOKEN=<same token as Flask clone>
-   ```
-4. Start bot:
-   ```bash
-   npm run dev
-   ```
-
-Then test with slash commands:
+- `/ping`
+- `/xp submit`
 - `/xp summary`
 - `/xp claim`
 - `/xp spend`
 - `/xp spend-cost`
+- `/xp health`
+
+## Development
+
+```bash
+npm run lint
+npm run format:check
+npm run typecheck
+npm run build
+npm run test
+npm run check
+```
+
+## CI and Automation Hygiene
+
+- CI workflow enforces `lint`, `format:check`, `typecheck`, tests, and build.
+- Weekly maintenance workflow runs full checks and `npm audit` for production dependencies.
+- Dependabot is enabled for npm packages and GitHub Actions updates.
+- Auto-triage workflow labels new issues/PRs, applies area labels, and assigns PR size labels.
+- Branch-protection automation workflow can enforce required checks on `main` (`quality`, `test-build`) using `REPO_ADMIN_TOKEN`.
+
+## Architecture
+
+- `src/index.ts`: bot runtime and interaction routing.
+- `src/registerCommands.ts`: slash command registration and command loading.
+- `src/services/adapter.ts`: backend adapter contract and `WebAppAdapter`.
+- `src/interactiveClaimWizard.ts`: multi-step claim UX.
+- `src/xpRules.ts`: V5 XP cost engine.
+
+## Open Source Process
+
+- Contribution guide: `CONTRIBUTING.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
+- Security reporting: `SECURITY.md`
+- License: `LICENSE`
