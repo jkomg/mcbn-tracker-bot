@@ -1,4 +1,5 @@
 import { SlashCommandBuilder } from 'discord.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
 
 export const data = new SlashCommandBuilder()
   .setName('ping')
@@ -6,6 +7,6 @@ export const data = new SlashCommandBuilder()
 
 export const name = 'ping';
 
-export async function execute(interaction: any) {
+export async function execute(interaction: ChatInputCommandInteraction) {
   await interaction.reply({ content: 'Pong.', ephemeral: true });
 }

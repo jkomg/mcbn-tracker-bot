@@ -8,10 +8,13 @@ import {
   TextInputBuilder,
   TextInputStyle,
   type ButtonInteraction,
+  type ChatInputCommandInteraction,
   type ModalSubmitInteraction,
   type StringSelectMenuInteraction,
 } from 'discord.js';
 import type { TrackerAdapter } from './services/adapter';
+import type { XpClaimCategory } from './types';
+import { parseMessageLink } from './utils/linkValidator';
 
 const CATEGORY_OPTIONS = [
   { key: 'posted_once', label: 'Posted at least once' },
@@ -46,8 +49,8 @@ type ClaimDraft = {
   currentNight: string | null;
   characterPage: number;
   periodPage: number;
-  categories: string[];
-  links: Record<string, string>;
+  categories: XpClaimCategory[];
+  links: Partial<Record<XpClaimCategory, string>>;
   createdAt: number;
 };
 
@@ -69,7 +72,7 @@ function truncateLabel(value: string, max = 100): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
-function getCategoryLabel(key: string): string {
+function getCategoryLabel(key: XpClaimCategory): string {
   return CATEGORY_OPTIONS.find((c) => c.key === key)?.label ?? key;
 }
 
@@ -98,11 +101,11 @@ function pageForValue(values: string[], value?: string): number {
   return Math.floor(idx / PAGE_SIZE);
 }
 
-function modalIdForBatch(keys: string[]): string {
+function modalIdForBatch(keys: XpClaimCategory[]): string {
   return `${LINKS_MODAL_PREFIX}:${keys.join(',')}`;
 }
 
-function parseModalKeys(customId: string): string[] {
+function parseModalKeys(customId: string): XpClaimCategory[] {
   if (!customId.startsWith(`${LINKS_MODAL_PREFIX}:`)) {
     return [];
   }
@@ -110,14 +113,14 @@ function parseModalKeys(customId: string): string[] {
   return encoded
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter((s): s is XpClaimCategory => CATEGORY_OPTIONS.some((opt) => opt.key === s));
 }
 
-function linkInputIdForKey(key: string): string {
+function linkInputIdForKey(key: XpClaimCategory): string {
   return `link:${key}`;
 }
 
-function nextModalBatchKeys(draft: ClaimDraft): string[] {
+function nextModalBatchKeys(draft: ClaimDraft): XpClaimCategory[] {
   const missingFirst = [...draft.categories].sort((a, b) => {
     const aMissing = !draft.links[a];
     const bMissing = !draft.links[b];
@@ -243,7 +246,7 @@ function buildRows(draft: ClaimDraft, disabled = false) {
 }
 
 export async function startClaimWizard(
-  interaction: any,
+  interaction: ChatInputCommandInteraction,
   adapter: TrackerAdapter,
   initialCharacter?: string,
   initialPlayPeriod?: string,
@@ -312,7 +315,9 @@ export async function handleClaimWizardSelect(interaction: StringSelectMenuInter
   }
 
   if (interaction.customId === CATEGORIES_MENU_ID) {
-    draft.categories = [...interaction.values];
+    draft.categories = interaction.values.filter((value): value is XpClaimCategory =>
+      CATEGORY_OPTIONS.some((option) => option.key === value),
+    );
   }
 
   await interaction.update({
@@ -423,9 +428,31 @@ export async function handleClaimWizardButton(interaction: ButtonInteraction, ad
       return true;
     }
 
-    const payloadCategories: Record<string, string> = {};
+    const invalid = draft.categories.filter((k) => {
+      const link = draft.links[k];
+      if (!link) {
+        return true;
+      }
+      const parsed = parseMessageLink(link);
+      if (!parsed) {
+        return true;
+      }
+      if (interaction.guildId && parsed.guildId !== interaction.guildId) {
+        return true;
+      }
+      return false;
+    });
+    if (invalid.length > 0) {
+      await interaction.reply({
+        content: `Invalid message links for: ${invalid.map((k) => `\`${k}\``).join(', ')}. Update links before submitting.`,
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    const payloadCategories: Partial<Record<XpClaimCategory, string>> = {};
     for (const key of draft.categories) {
-      payloadCategories[key] = draft.links[key];
+      payloadCategories[key] = draft.links[key] as string;
     }
 
     const result = await adapter.submitClaim({
@@ -463,18 +490,37 @@ export async function handleClaimWizardModal(interaction: ModalSubmitInteraction
     return true;
   }
 
+  const invalidKeys: XpClaimCategory[] = [];
   for (const key of keys) {
     const value = interaction.fields.getTextInputValue(linkInputIdForKey(key)).trim();
-    if (value) {
-      draft.links[key] = value;
+    if (!value) {
+      continue;
     }
+
+    const parsed = parseMessageLink(value);
+    if (!parsed) {
+      invalidKeys.push(key);
+      continue;
+    }
+    if (interaction.guildId && parsed.guildId !== interaction.guildId) {
+      invalidKeys.push(key);
+      continue;
+    }
+
+    draft.links[key] = value;
   }
 
   const missing = draft.categories.filter((k) => !draft.links[k]);
+  const invalidSummary = invalidKeys.length
+    ? `Invalid links were ignored for: ${invalidKeys.map((k) => `\`${k}\``).join(', ')}.\n`
+    : '';
+
   await interaction.reply({
-    content: missing.length
-      ? `Saved links. ${missing.length} selected categor${missing.length === 1 ? 'y is' : 'ies are'} still missing links. Click **Add / Update Links (Required)** again.`
-      : 'Saved links for all selected categories. You can now submit.',
+    content: `${invalidSummary}${
+      missing.length
+        ? `Saved links. ${missing.length} selected categor${missing.length === 1 ? 'y is' : 'ies are'} still missing links. Click **Add / Update Links (Required)** again.`
+        : 'Saved links for all selected categories. You can now submit.'
+    }`,
     ephemeral: true,
   });
   return true;

@@ -24,10 +24,13 @@ const claimContextSchema = z.object({
   currentNight: z.string().nullable(),
 });
 
-const CLAIM_CONTEXT_CACHE_TTL_MS = Number(process.env.CLAIM_CONTEXT_CACHE_TTL_MS ?? 30_000);
-const CLAIM_CONTEXT_STALE_IF_ERROR_MS = Number(process.env.CLAIM_CONTEXT_STALE_IF_ERROR_MS ?? 300_000);
-const CLAIM_CONTEXT_MAX_RETRIES = Number(process.env.CLAIM_CONTEXT_MAX_RETRIES ?? 2);
-const CLAIM_CONTEXT_RETRY_BASE_MS = Number(process.env.CLAIM_CONTEXT_RETRY_BASE_MS ?? 250);
+type AdapterOptions = {
+  requestTimeoutMs?: number;
+  claimContextCacheTtlMs?: number;
+  claimContextStaleIfErrorMs?: number;
+  claimContextMaxRetries?: number;
+  claimContextRetryBaseMs?: number;
+};
 
 type ClaimContextResult = {
   context: ClaimContext;
@@ -40,13 +43,28 @@ type ClaimContextResult = {
 export class WebAppAdapter implements TrackerAdapter {
   private claimContextCache?: { value: ClaimContext; fetchedAt: number };
   private claimContextInFlight?: Promise<ClaimContextResult>;
+  private readonly baseUrl: string;
+  private readonly apiToken?: string;
+  private readonly requestTimeoutMs: number;
+  private readonly claimContextCacheTtlMs: number;
+  private readonly claimContextStaleIfErrorMs: number;
+  private readonly claimContextMaxRetries: number;
+  private readonly claimContextRetryBaseMs: number;
 
-  constructor(private readonly baseUrl: string, private readonly apiToken?: string) {}
+  constructor(baseUrl: string, apiToken?: string, opts: AdapterOptions = {}) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.apiToken = apiToken;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? 10_000;
+    this.claimContextCacheTtlMs = opts.claimContextCacheTtlMs ?? 30_000;
+    this.claimContextStaleIfErrorMs = opts.claimContextStaleIfErrorMs ?? 300_000;
+    this.claimContextMaxRetries = opts.claimContextMaxRetries ?? 2;
+    this.claimContextRetryBaseMs = opts.claimContextRetryBaseMs ?? 250;
+  }
 
   async getSummary(characterName: string): Promise<XpSummary | null> {
     const url = `${this.baseUrl}/api/characters/${encodeURIComponent(characterName)}/summary`;
-    const resp = await fetch(url, {
-      headers: this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {},
+    const resp = await this.fetchWithTimeout(url, {
+      headers: this.authHeaders(),
     }).catch(() => null);
 
     if (!resp || resp.status === 404) {
@@ -80,8 +98,8 @@ export class WebAppAdapter implements TrackerAdapter {
     let webApi: AdapterHealthReport['webApi'];
 
     try {
-      const resp = await fetch(`${this.baseUrl}/api/health`, {
-        headers: this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {},
+      const resp = await this.fetchWithTimeout(`${this.baseUrl}/api/health`, {
+        headers: this.authHeaders(),
       });
       webApi = {
         ok: resp.ok,
@@ -126,11 +144,11 @@ export class WebAppAdapter implements TrackerAdapter {
   }
 
   private async post(path: string, body: unknown, successMessage: string) {
-    const resp = await fetch(`${this.baseUrl}${path}`, {
+    const resp = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {}),
+        ...this.authHeaders(),
       },
       body: JSON.stringify(body),
     }).catch(() => null);
@@ -140,8 +158,13 @@ export class WebAppAdapter implements TrackerAdapter {
     }
 
     if (!resp.ok) {
-      const text = await resp.text().catch(() => 'Unknown API error.');
-      return { ok: false, message: `API error ${resp.status}: ${text}` };
+      const bodyPreview = await resp.text().then((v) => v.slice(0, 160)).catch(() => '');
+      logEvent('warn', 'web_api_post_failed', { path, status: resp.status, bodyPreview });
+      const message =
+        resp.status >= 500
+          ? 'Web API failed while processing the request. Please retry shortly.'
+          : `Request was rejected by the web API (status ${resp.status}).`;
+      return { ok: false, message };
     }
 
     return { ok: true, message: successMessage };
@@ -156,7 +179,7 @@ export class WebAppAdapter implements TrackerAdapter {
 
   private async getClaimContextResult(forceRefresh = false): Promise<ClaimContextResult> {
     const cached = this.claimContextCache;
-    if (!forceRefresh && cached && this.getCacheAgeMs() <= CLAIM_CONTEXT_CACHE_TTL_MS) {
+    if (!forceRefresh && cached && this.getCacheAgeMs() <= this.claimContextCacheTtlMs) {
       return {
         context: cached.value,
         source: 'cache',
@@ -177,7 +200,7 @@ export class WebAppAdapter implements TrackerAdapter {
       })
       .catch((error) => {
         const stale = this.claimContextCache;
-        if (stale && this.getCacheAgeMs() <= CLAIM_CONTEXT_STALE_IF_ERROR_MS) {
+        if (stale && this.getCacheAgeMs() <= this.claimContextStaleIfErrorMs) {
           logEvent('warn', 'claim_context_stale_cache_fallback', {
             error: errorToMessage(error),
             cacheAgeMs: this.getCacheAgeMs(),
@@ -185,7 +208,7 @@ export class WebAppAdapter implements TrackerAdapter {
           return {
             context: stale.value,
             source: 'stale-cache' as const,
-            retries: CLAIM_CONTEXT_MAX_RETRIES,
+            retries: this.claimContextMaxRetries,
             latencyMs: 0,
             cacheAgeMs: this.getCacheAgeMs(),
           };
@@ -204,23 +227,23 @@ export class WebAppAdapter implements TrackerAdapter {
     let retries = 0;
     let lastError = 'Unknown error';
 
-    for (let attempt = 0; attempt <= CLAIM_CONTEXT_MAX_RETRIES; attempt += 1) {
+    for (let attempt = 0; attempt <= this.claimContextMaxRetries; attempt += 1) {
       try {
-        const resp = await fetch(`${this.baseUrl}/api/meta/claim-context`, {
-          headers: this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {},
+        const resp = await this.fetchWithTimeout(`${this.baseUrl}/api/meta/claim-context`, {
+          headers: this.authHeaders(),
         });
 
         if (!resp.ok) {
           const statusError = `Claim context API failed (${resp.status})`;
-          if (resp.status >= 500 && attempt < CLAIM_CONTEXT_MAX_RETRIES) {
+          if (resp.status >= 500 && attempt < this.claimContextMaxRetries) {
             retries += 1;
             lastError = statusError;
             logEvent('warn', 'claim_context_retry', {
               attempt: attempt + 1,
               status: resp.status,
-              waitMs: CLAIM_CONTEXT_RETRY_BASE_MS * 2 ** attempt,
+              waitMs: this.claimContextRetryBaseMs * 2 ** attempt,
             });
-            await sleep(CLAIM_CONTEXT_RETRY_BASE_MS * 2 ** attempt);
+            await sleep(this.claimContextRetryBaseMs * 2 ** attempt);
             continue;
           }
           throw new Error(statusError);
@@ -237,20 +260,37 @@ export class WebAppAdapter implements TrackerAdapter {
         };
       } catch (error) {
         lastError = errorToMessage(error);
-        if (attempt >= CLAIM_CONTEXT_MAX_RETRIES) {
+        if (attempt >= this.claimContextMaxRetries) {
           break;
         }
         retries += 1;
         logEvent('warn', 'claim_context_retry', {
           attempt: attempt + 1,
           error: lastError,
-          waitMs: CLAIM_CONTEXT_RETRY_BASE_MS * 2 ** attempt,
+          waitMs: this.claimContextRetryBaseMs * 2 ** attempt,
         });
-        await sleep(CLAIM_CONTEXT_RETRY_BASE_MS * 2 ** attempt);
+        await sleep(this.claimContextRetryBaseMs * 2 ** attempt);
       }
     }
 
     throw new Error(lastError || 'Unable to reach web app API.');
+  }
+
+  private authHeaders(): Record<string, string> {
+    return this.apiToken ? { Authorization: `Bearer ${this.apiToken}` } : {};
+  }
+
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

@@ -1,7 +1,19 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { AutocompleteInteraction, ChatInputCommandInteraction, SlashCommandBuilder } from 'discord.js';
+import type { CommandContext } from '../discord';
 import { startClaimWizard } from '../interactiveClaimWizard';
 import { errorToMessage, logEvent } from '../logger';
+import type { XpClaimCategory, XpSpendCategory } from '../types';
+import { parseMessageLink } from '../utils/linkValidator';
 import { calculateXpCost } from '../xpRules';
+
+const CLAIM_CATEGORY_CHOICES = [
+  { name: 'Posted at least once', value: 'posted_once' },
+  { name: 'Hunting / Awakening scene', value: 'hunting_awakening' },
+  { name: 'Scene with another character', value: 'scene_with_another' },
+  { name: 'Conflict with another character', value: 'conflict' },
+  { name: 'Combat with another character', value: 'combat' },
+  { name: 'Unmitigated stain', value: 'unmitigated_stain' },
+] as const;
 
 export const data = new SlashCommandBuilder()
   .setName('xp')
@@ -31,7 +43,13 @@ export const data = new SlashCommandBuilder()
       .setDescription('Submit a simple XP claim via adapter')
       .addStringOption((o) => o.setName('character').setDescription('Character name').setRequired(true))
       .addStringOption((o) => o.setName('play_period').setDescription('Period label').setRequired(true))
-      .addStringOption((o) => o.setName('category').setDescription('Category key').setRequired(true))
+      .addStringOption((o) =>
+        o
+          .setName('category')
+          .setDescription('Claim category')
+          .setRequired(true)
+          .addChoices(...CLAIM_CATEGORY_CHOICES),
+      )
       .addStringOption((o) => o.setName('link').setDescription('Discord post link').setRequired(true)),
   )
   .addSubcommand((s) =>
@@ -57,8 +75,12 @@ export const data = new SlashCommandBuilder()
           ),
       )
       .addStringOption((o) => o.setName('trait').setDescription('Trait name').setRequired(true))
-      .addIntegerOption((o) => o.setName('current_dots').setDescription('Current dots').setRequired(true))
-      .addIntegerOption((o) => o.setName('new_dots').setDescription('New dots').setRequired(true))
+      .addIntegerOption((o) =>
+        o.setName('current_dots').setDescription('Current dots').setRequired(true).setMinValue(0).setMaxValue(10),
+      )
+      .addIntegerOption((o) =>
+        o.setName('new_dots').setDescription('New dots').setRequired(true).setMinValue(0).setMaxValue(10),
+      )
       .addStringOption((o) => o.setName('justification').setDescription('RP rationale').setRequired(true))
       .addBooleanOption((o) => o.setName('is_in_clan').setDescription('In-clan discipline?').setRequired(false)),
   )
@@ -83,8 +105,12 @@ export const data = new SlashCommandBuilder()
             { name: 'Advantage (Merit/Background)', value: 'Advantage (Merit/Background)' },
           ),
       )
-      .addIntegerOption((o) => o.setName('current_dots').setDescription('Current dots').setRequired(true))
-      .addIntegerOption((o) => o.setName('new_dots').setDescription('New dots').setRequired(true)),
+      .addIntegerOption((o) =>
+        o.setName('current_dots').setDescription('Current dots').setRequired(true).setMinValue(0).setMaxValue(10),
+      )
+      .addIntegerOption((o) =>
+        o.setName('new_dots').setDescription('New dots').setRequired(true).setMinValue(0).setMaxValue(10),
+      ),
   )
   .addSubcommand((s) =>
     s
@@ -94,7 +120,7 @@ export const data = new SlashCommandBuilder()
 
 export const name = 'xp';
 
-export async function autocomplete(interaction: any, { adapter }: any) {
+export async function autocomplete(interaction: AutocompleteInteraction, { adapter }: CommandContext) {
   const option = interaction.options.getFocused(true);
   const sub = interaction.options.getSubcommand(false);
   if (sub !== 'submit' || option.name !== 'character') {
@@ -125,7 +151,7 @@ export async function autocomplete(interaction: any, { adapter }: any) {
   }
 }
 
-export async function execute(interaction: any, { adapter }: any) {
+export async function execute(interaction: ChatInputCommandInteraction, { adapter }: CommandContext) {
   const sub = interaction.options.getSubcommand();
   const meta = {
     interactionId: interaction.id,
@@ -176,8 +202,17 @@ export async function execute(interaction: any, { adapter }: any) {
   if (sub === 'claim') {
     const character = interaction.options.getString('character', true);
     const playPeriod = interaction.options.getString('play_period', true);
-    const category = interaction.options.getString('category', true);
+    const category = interaction.options.getString('category', true) as XpClaimCategory;
     const link = interaction.options.getString('link', true);
+    const parsed = parseMessageLink(link);
+    if (!parsed) {
+      await interaction.reply({ content: 'Invalid Discord message link format.', ephemeral: true });
+      return;
+    }
+    if (interaction.guildId && parsed.guildId !== interaction.guildId) {
+      await interaction.reply({ content: 'Link must point to a message in this server.', ephemeral: true });
+      return;
+    }
 
     const result = await adapter.submitClaim({
       characterName: character,
@@ -203,7 +238,7 @@ export async function execute(interaction: any, { adapter }: any) {
 
     const result = await adapter.submitSpend({
       characterName: character,
-      spendCategory: spendCategory as any,
+      spendCategory: spendCategory as XpSpendCategory,
       traitName,
       currentDots,
       newDots,
@@ -230,7 +265,7 @@ export async function execute(interaction: any, { adapter }: any) {
     const newDots = interaction.options.getInteger('new_dots', true);
 
     try {
-      const cost = calculateXpCost(category as any, currentDots, newDots);
+      const cost = calculateXpCost(category as XpSpendCategory, currentDots, newDots);
       logEvent('info', 'xp_spend_cost', { ...meta, category, currentDots, newDots, cost });
       await interaction.reply({ content: `Calculated cost: **${cost} XP**`, ephemeral: true });
     } catch (error) {

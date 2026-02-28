@@ -1,11 +1,24 @@
-import { Client, Collection, REST, Routes } from 'discord.js';
+import { Collection, REST, Routes } from 'discord.js';
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { BotClient, BotCommand } from './discord';
 import { logEvent } from './logger';
+import { config } from './config';
 
-export async function registerCommands(client: Client) {
-  const commands: any[] = [];
+function asBotCommand(candidate: unknown): BotCommand | null {
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+  const record = candidate as Partial<BotCommand>;
+  if (!record.name || !record.data || !record.execute) {
+    return null;
+  }
+  return record as BotCommand;
+}
+
+export async function registerCommands(client: BotClient) {
+  const commands: unknown[] = [];
   const commandsPath = path.join(__dirname, 'commands');
 
   for (const file of fs.readdirSync(commandsPath)) {
@@ -13,18 +26,20 @@ export async function registerCommands(client: Client) {
       continue;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require(path.join(commandsPath, file));
-    if (mod.data) {
-      commands.push(mod.data.toJSON());
+    const command = asBotCommand(mod);
+    if (!command) {
+      continue;
     }
-    if (mod.name && mod.execute) {
-      (client as any).commands.set(mod.name, mod);
-    }
+
+    commands.push(command.data.toJSON());
+    client.commands.set(command.name, command);
   }
 
-  const token = process.env.BOT_TOKEN as string | undefined;
-  const clientId = process.env.CLIENT_ID as string | undefined;
-  const guildId = process.env.TEST_GUILD_ID as string | undefined;
+  const token = config.botToken;
+  const clientId = config.clientId;
+  const guildId = config.testGuildId;
 
   if (!token || !clientId) {
     logEvent('warn', 'command_registration_skipped_missing_env', {
@@ -46,6 +61,6 @@ export async function registerCommands(client: Client) {
   logEvent('info', 'command_registration_global', { count: commands.length });
 }
 
-export function initClientCommandCollection(client: Client) {
-  (client as any).commands = new Collection();
+export function initClientCommandCollection(client: BotClient) {
+  client.commands = new Collection<string, BotCommand>();
 }
