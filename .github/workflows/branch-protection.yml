@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Configure branch protection for main
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           REPO_ADMIN_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
         with:
