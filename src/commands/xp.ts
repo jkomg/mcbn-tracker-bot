@@ -1,6 +1,7 @@
 import { SlashCommandBuilder } from 'discord.js';
 import { startClaimWizard } from '../interactiveClaimWizard';
 import { errorToMessage, logEvent } from '../logger';
+import { parseMessageLink } from '../utils/linkValidator';
 import { calculateXpCost } from '../xpRules';
 
 export const data = new SlashCommandBuilder()
@@ -178,6 +179,14 @@ export async function execute(interaction: any, { adapter }: any) {
     const playPeriod = interaction.options.getString('play_period', true);
     const category = interaction.options.getString('category', true);
     const link = interaction.options.getString('link', true);
+
+    if (!parseMessageLink(link)) {
+      await interaction.reply({
+        content: 'Invalid Discord message link. Expected format: https://discord.com/channels/<guild>/<channel>/<message>',
+        ephemeral: true,
+      });
+      return;
+    }
 
     const result = await adapter.submitClaim({
       characterName: character,

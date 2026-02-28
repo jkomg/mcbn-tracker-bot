@@ -12,6 +12,7 @@ import {
   type StringSelectMenuInteraction,
 } from 'discord.js';
 import type { TrackerAdapter } from './services/adapter';
+import { parseMessageLink } from './utils/linkValidator';
 
 const CATEGORY_OPTIONS = [
   { key: 'posted_once', label: 'Posted at least once' },
@@ -465,9 +466,19 @@ export async function handleClaimWizardModal(interaction: ModalSubmitInteraction
 
   for (const key of keys) {
     const value = interaction.fields.getTextInputValue(linkInputIdForKey(key)).trim();
-    if (value) {
-      draft.links[key] = value;
+    if (!value) {
+      continue;
     }
+
+    if (!parseMessageLink(value)) {
+      await interaction.reply({
+        content: `Invalid Discord message link for \`${key}\`. Expected format: https://discord.com/channels/<guild>/<channel>/<message>`,
+        ephemeral: true,
+      });
+      return true;
+    }
+
+    draft.links[key] = value;
   }
 
   const missing = draft.categories.filter((k) => !draft.links[k]);
